@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.26", "stable"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: test
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+
+      - name: build the binary
+        run: go build -o k8s-webhook-failure-audit ./cmd/k8s-webhook-failure-audit
+
+      # The examples contain a deliberate deadlock, so exit 1 is the pass
+      # condition here. GitHub wraps run: steps in `bash -e`, so the expected
+      # non-zero exit has to be captured rather than allowed to abort the step.
+      - name: findings exit 1 on the example manifests
+        run: |
+          set +e
+          ./k8s-webhook-failure-audit --manifests examples/webhooks
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "expected exit 1 on the example manifests, got $code"
+            exit 1
+          fi
+
+      - name: clean manifests exit 0
+        run: ./k8s-webhook-failure-audit --manifests internal/audit/testdata/excluded.yaml
+
+      - name: json and sarif parse
+        run: |
+          ./k8s-webhook-failure-audit --manifests examples/webhooks --json --fail-on none | python3 -m json.tool > /dev/null
+          ./k8s-webhook-failure-audit --manifests examples/webhooks --sarif --fail-on none | python3 -m json.tool > /dev/null

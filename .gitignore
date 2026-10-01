@@ -1,0 +1,16 @@
+# Built binary, anchored to the repo root so it never matches the
+# cmd/k8s-webhook-failure-audit/ source directory.
+/k8s-webhook-failure-audit
+/dist/
+
+# Go build and test artifacts
+/*.exe
+/*.test
+/coverage.out
+/coverage.html
+
+# Fixtures and examples are part of the test suite.
+!internal/audit/testdata/**
+!examples/**
+
+.DS_Store

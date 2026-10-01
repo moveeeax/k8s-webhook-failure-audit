@@ -1,0 +1,29 @@
+# A policy engine installed with the defaults: fail closed, intercepts pod and
+# workload writes everywhere, no carve-out for kube-system or its own namespace.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: policy-engine
+webhooks:
+  - name: validate.policy-engine.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 30
+    clientConfig:
+      service:
+        name: policy-engine-webhook
+        namespace: policy-system
+        port: 443
+        path: /validate
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: Namespaced
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets", "daemonsets"]
+        scope: Namespaced

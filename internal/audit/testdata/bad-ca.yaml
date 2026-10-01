@@ -1,0 +1,21 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: broken-bundle
+webhooks:
+  - name: validate.broken-bundle.example.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service:
+        name: backend
+        namespace: backend-system
+        port: 443
+      caBundle: bm90LWEtY2VydGlmaWNhdGUtYXQtYWxs
+    rules:
+      - apiGroups: ["example.com"]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["widgets"]
+        scope: Namespaced
