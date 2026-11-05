@@ -16,11 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.26", "stable"]
+        go: ["1.26", "1.27"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           cache: true
@@ -49,11 +49,11 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "stable"
+          go-version: "1.27"
           cache: true
 
       - name: build the binary
