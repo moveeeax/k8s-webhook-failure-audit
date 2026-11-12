@@ -235,3 +235,32 @@ func TestProtectedNamespacesFlag(t *testing.T) {
 		t.Errorf("output should name the protected namespace:\n%s", out)
 	}
 }
+
+func TestSystemResourcesFlag(t *testing.T) {
+	path := filepath.Join(fixtures(), "system-resources.yaml")
+	code, out, _ := run(t, "--manifests", path)
+	if code != cli.ExitFindings || !strings.Contains(out, audit.RuleSystemResources) {
+		t.Fatalf("default list: exit = %d\n%s", code, out)
+	}
+
+	// An empty list turns the rule off.
+	if code, out, _ := run(t, "--manifests", path, "--system-resources", ""); code != cli.ExitOK {
+		t.Fatalf("empty list: exit = %d, want 0\n%s", code, out)
+	}
+
+	// A custom list replaces the defaults rather than adding to them.
+	code, out, _ = run(t, "--manifests", path, "--system-resources", "nodes/status")
+	if code != cli.ExitFindings || !strings.Contains(out, "nodes/status") || strings.Contains(out, "leases") {
+		t.Fatalf("custom list: exit = %d\n%s", code, out)
+	}
+}
+
+func TestBadSystemResourceIsAnError(t *testing.T) {
+	code, _, errOut := run(t, "--manifests", fixtures(), "--system-resources", "pods/*")
+	if code != cli.ExitError {
+		t.Fatalf("exit = %d, want %d", code, cli.ExitError)
+	}
+	if !strings.Contains(errOut, "--system-resources") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}

@@ -33,9 +33,12 @@ type Webhook struct {
 	Rules             []Rule
 	NamespaceSelector *metav1.LabelSelector
 	ObjectSelector    *metav1.LabelSelector
-	CABundle          []byte
-	Service           *ServiceRef
-	URL               string
+	// MatchConditions holds the names of the webhook's CEL match conditions.
+	// The expressions are not evaluated; rules only need to know they exist.
+	MatchConditions []string
+	CABundle        []byte
+	Service         *ServiceRef
+	URL             string
 }
 
 // Rule mirrors admissionregistration/v1 RuleWithOperations.

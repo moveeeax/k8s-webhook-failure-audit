@@ -157,6 +157,7 @@ func FromValidating(c *admv1.ValidatingWebhookConfiguration, source string) mode
 			ObjectSelector:    w.ObjectSelector,
 			CABundle:          w.ClientConfig.CABundle,
 			Rules:             convertRules(w.Rules),
+			MatchConditions:   matchConditionNames(w.MatchConditions),
 		}
 		if w.FailurePolicy != nil {
 			mw.FailurePolicy = string(*w.FailurePolicy)
@@ -188,6 +189,7 @@ func FromMutating(c *admv1.MutatingWebhookConfiguration, source string) model.Co
 			ObjectSelector:    w.ObjectSelector,
 			CABundle:          w.ClientConfig.CABundle,
 			Rules:             convertRules(w.Rules),
+			MatchConditions:   matchConditionNames(w.MatchConditions),
 		}
 		if w.FailurePolicy != nil {
 			mw.FailurePolicy = string(*w.FailurePolicy)
@@ -211,6 +213,14 @@ func applyClientConfig(mw *model.Webhook, cc admv1.WebhookClientConfig) {
 	if cc.URL != nil {
 		mw.URL = *cc.URL
 	}
+}
+
+func matchConditionNames(mcs []admv1.MatchCondition) []string {
+	var out []string
+	for _, mc := range mcs {
+		out = append(out, mc.Name)
+	}
+	return out
 }
 
 func convertRules(rules []admv1.RuleWithOperations) []model.Rule {

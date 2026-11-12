@@ -5,7 +5,7 @@ Four webhook configurations in the shapes you actually meet in a cluster:
 | file | shape | expected |
 | --- | --- | --- |
 | `webhooks/policy-engine.yaml` | fail-closed, intercepts pods and workloads everywhere, no carve-out, no `caBundle` | 2 high + 1 medium |
-| `webhooks/catch-all-mutator.yaml` | fail-closed with `apiGroups: ["*"]`, `resources: ["*"]`, `operations: ["*"]` | 2 high + 1 medium |
+| `webhooks/catch-all-mutator.yaml` | fail-closed with `apiGroups: ["*"]`, `resources: ["*"]`, `operations: ["*"]` | 3 high + 1 medium |
 | `webhooks/ingress-nginx.yaml` | fail-closed, but only inspects `Ingress` objects | clean |
 | `webhooks/cert-manager.yaml` | fail-closed, `resources: ["*/*"]` inside its own API groups, `caBundle` injected by annotation | clean |
 
