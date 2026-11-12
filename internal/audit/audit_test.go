@@ -66,6 +66,7 @@ func TestManifestFixtures(t *testing.T) {
 		{"broad.yaml", []string{
 			"BROAD_RULES/high",
 			"FAIL_CLOSED_NO_EXCLUSION/high",
+			"INTERCEPTS_SYSTEM_RESOURCES/high",
 			"TIMEOUT_TOO_LONG/medium",
 		}},
 		{"injected-ca.yaml", nil},
@@ -73,6 +74,8 @@ func TestManifestFixtures(t *testing.T) {
 		{"label-selector.yaml", []string{"FAIL_CLOSED_NO_EXCLUSION/medium"}},
 		{"no-ca.yaml", []string{"NO_CA_BUNDLE/medium"}},
 		{"bad-ca.yaml", []string{"CA_BUNDLE_INVALID/high"}},
+		{"system-resources.yaml", []string{"INTERCEPTS_SYSTEM_RESOURCES/high"}},
+		{"system-match-conditions.yaml", []string{"INTERCEPTS_SYSTEM_RESOURCES/medium"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
@@ -436,4 +439,195 @@ func certPEM(t *testing.T, notAfter time.Time) []byte {
 		t.Fatalf("create certificate: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func systemWebhook(t *testing.T, policy string, sel *metav1.LabelSelector, rules ...model.Rule) []model.Config {
+	t.Helper()
+	return []model.Config{{
+		Kind: model.KindValidating, Name: "system", Source: "unit",
+		Webhooks: []model.Webhook{{
+			Name: "validate.system.example.com", FailurePolicy: policy,
+			CABundle:          certPEM(t, refTime.AddDate(3, 0, 0)),
+			NamespaceSelector: sel,
+			Service:           &model.ServiceRef{Namespace: "ops", Name: "system"},
+			Rules:             rules,
+		}},
+	}}
+}
+
+func onlySystemFinding(t *testing.T, got []audit.Finding) audit.Finding {
+	t.Helper()
+	if len(got) != 1 || got[0].Rule != audit.RuleSystemResources {
+		t.Fatalf("findings = %v", ruleSet(got))
+	}
+	return got[0]
+}
+
+// Excluding kube-system does not take a webhook out of the node heartbeat
+// path: node status is cluster-scoped and node leases live in kube-node-lease.
+func TestSystemResourcesSurviveKubeSystemExclusion(t *testing.T) {
+	f := onlySystemFinding(t, audit.Run(loadFixture(t, "system-resources.yaml"), opts(), nil))
+	if f.Severity != audit.SeverityHigh {
+		t.Fatalf("severity = %s, want high", f.Severity)
+	}
+	for _, want := range []string{"leases.coordination.k8s.io", "nodes/status", "lease-guard/lease-guard"} {
+		if !strings.Contains(f.Message, want) {
+			t.Errorf("message does not mention %q: %s", want, f.Message)
+		}
+	}
+	if !strings.Contains(f.Remediation, "matchCondition") {
+		t.Errorf("remediation should point at matchConditions: %s", f.Remediation)
+	}
+}
+
+func TestSystemResourcesFailOpenIsMedium(t *testing.T) {
+	cfgs := systemWebhook(t, "Ignore", nil, model.Rule{
+		APIGroups: []string{""}, Resources: []string{"nodes"},
+		Operations: []string{"UPDATE"}, Scope: "Cluster",
+	})
+	f := onlySystemFinding(t, audit.Run(cfgs, opts(), nil))
+	if f.Severity != audit.SeverityMedium {
+		t.Fatalf("severity = %s, want medium", f.Severity)
+	}
+	if !strings.Contains(f.Message, "10s") {
+		t.Errorf("message should name the effective timeout: %s", f.Message)
+	}
+}
+
+// Leases only matter in kube-system (leader election) and kube-node-lease
+// (node heartbeats). A selector that excludes both clears them.
+func TestLeasesClearedWhenLeaseNamespacesExcluded(t *testing.T) {
+	sel := &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{
+		Key:      "kubernetes.io/metadata.name",
+		Operator: metav1.LabelSelectorOpNotIn,
+		Values:   []string{"kube-system", "kube-node-lease", "ops"},
+	}}}
+	lease := model.Rule{
+		APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"},
+		Operations: []string{"UPDATE"}, Scope: "Namespaced",
+	}
+	if got := audit.Run(systemWebhook(t, "Fail", sel, lease), opts(), nil); len(got) != 0 {
+		t.Fatalf("expected no findings, got %v", ruleSet(got))
+	}
+
+	// pods/status is written by every kubelet in every namespace, so the same
+	// selector does not clear it.
+	status := model.Rule{
+		APIGroups: []string{""}, Resources: []string{"pods/status"},
+		Operations: []string{"UPDATE"}, Scope: "Namespaced",
+	}
+	f := onlySystemFinding(t, audit.Run(systemWebhook(t, "Fail", sel, status), opts(), nil))
+	if !strings.Contains(f.Message, "pods/status") || strings.Contains(f.Message, "leases") {
+		t.Errorf("message = %s", f.Message)
+	}
+}
+
+// Resource patterns follow admissionregistration/v1: "*" is every resource
+// but no subresource, "x/*" every subresource of x, "*/status" the status of
+// everything, "*/*" all of it.
+func TestSystemResourcePatternMatching(t *testing.T) {
+	cases := []struct {
+		group, resource, scope string
+		want                   []string
+	}{
+		{"", "pods", "*", nil},
+		{"", "pods/*", "*", []string{"pods/status"}},
+		{"", "*/status", "*", []string{"nodes/status", "pods/status"}},
+		{"", "*", "*", []string{"nodes"}},
+		{"", "nodes", "Namespaced", nil},
+		{"*", "*/*", "*", []string{
+			"leases.coordination.k8s.io", "nodes", "nodes/status", "pods/status",
+			"subjectaccessreviews.authorization.k8s.io", "tokenreviews.authentication.k8s.io",
+		}},
+		{"admissionregistration.k8s.io", "*", "*", nil},
+		{"authentication.k8s.io", "tokenreviews", "", []string{"tokenreviews.authentication.k8s.io"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.group+"/"+tc.resource+"@"+tc.scope, func(t *testing.T) {
+			cfgs := systemWebhook(t, "Fail", nil, model.Rule{
+				APIGroups: []string{tc.group}, Resources: []string{tc.resource},
+				Operations: []string{"CREATE", "UPDATE"}, Scope: tc.scope,
+			})
+			var got []audit.Finding
+			for _, f := range audit.Run(cfgs, opts(), nil) {
+				if f.Rule == audit.RuleSystemResources {
+					got = append(got, f)
+				}
+			}
+			if len(tc.want) == 0 {
+				if len(got) != 0 {
+					t.Fatalf("expected no system finding, got %s", got[0].Message)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected one system finding, got %d", len(got))
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got[0].Message, w) {
+					t.Errorf("message does not mention %q: %s", w, got[0].Message)
+				}
+			}
+		})
+	}
+}
+
+func TestSystemResourcesDeleteOnlyIsIgnored(t *testing.T) {
+	cfgs := systemWebhook(t, "Fail", nil, model.Rule{
+		APIGroups: []string{""}, Resources: []string{"nodes"},
+		Operations: []string{"DELETE"}, Scope: "Cluster",
+	})
+	if got := audit.Run(cfgs, opts(), nil); len(got) != 0 {
+		t.Fatalf("expected no findings, got %v", ruleSet(got))
+	}
+}
+
+func TestMatchConditionsMakeSystemFindingUnverified(t *testing.T) {
+	cfgs := loadFixture(t, "system-match-conditions.yaml")
+	if got := cfgs[0].Webhooks[0].MatchConditions; len(got) != 1 || got[0] != "exclude-leases" {
+		t.Fatalf("match conditions = %v", got)
+	}
+	f := onlySystemFinding(t, audit.Run(cfgs, opts(), nil))
+	if f.Severity != audit.SeverityMedium || !strings.Contains(f.Message, "unverified") || !strings.Contains(f.Message, "exclude-leases") {
+		t.Fatalf("finding = %s/%s", f.Severity, f.Message)
+	}
+}
+
+func TestSystemResourcesOffWhenListEmpty(t *testing.T) {
+	o := opts()
+	o.SystemResources = nil
+	got := ruleSet(audit.Run(loadFixture(t, "system-resources.yaml"), o, nil))
+	if len(got) != 0 {
+		t.Fatalf("findings = %v", got)
+	}
+}
+
+func TestParseSystemResources(t *testing.T) {
+	got, err := audit.ParseSystemResources([]string{"leases.coordination.k8s.io", " nodes/status ", "deployments/status.apps", "nodes/status", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("parsed %d entries, want 3 (duplicates and blanks dropped): %+v", len(got), got)
+	}
+	// A built-in entry keeps its scope and namespaces.
+	if got[0].Scope != "Namespaced" || len(got[0].Namespaces) != 2 {
+		t.Errorf("leases lost built-in metadata: %+v", got[0])
+	}
+	want := audit.SystemResource{Group: "apps", Resource: "deployments", Subresource: "status"}
+	if got[2].Group != want.Group || got[2].Resource != want.Resource || got[2].Subresource != want.Subresource || got[2].Scope != "" {
+		t.Errorf("custom entry = %+v, want %+v", got[2], want)
+	}
+	if got[2].String() != "deployments/status.apps" {
+		t.Errorf("String() = %q", got[2].String())
+	}
+	for _, bad := range []string{"*", "nodes/", "/status", "pods/*", "a/b/c"} {
+		if _, err := audit.ParseSystemResources([]string{bad}); err == nil {
+			t.Errorf("expected an error for %q", bad)
+		}
+	}
+	defaults, err := audit.ParseSystemResources(audit.DefaultSystemResourceNames())
+	if err != nil || len(defaults) != len(audit.DefaultSystemResources()) {
+		t.Fatalf("defaults do not round-trip: %v, %v", defaults, err)
+	}
 }

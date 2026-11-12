@@ -26,6 +26,7 @@ const (
 	RuleCertExpired           = "CERT_EXPIRED"
 	RuleBroadRules            = "BROAD_RULES"
 	RuleTimeoutTooLong        = "TIMEOUT_TOO_LONG"
+	RuleSystemResources       = "INTERCEPTS_SYSTEM_RESOURCES"
 )
 
 // Descriptions feed the SARIF tool driver so code scanning shows something
@@ -39,6 +40,7 @@ var Descriptions = map[string]string{
 	RuleCertExpired:           "The serving CA certificate in caBundle has already expired.",
 	RuleBroadRules:            "A fail-closed webhook matches all API groups, resources and operations.",
 	RuleTimeoutTooLong:        "A fail-closed webhook has a timeout high enough to turn a slow backend into API server latency.",
+	RuleSystemResources:       "A webhook intercepts leases, nodes, pod status or authentication reviews, which the control plane and kubelets write on a timer.",
 }
 
 // Finding is one problem found on one webhook.
@@ -60,6 +62,9 @@ type Options struct {
 	ProtectedNamespaces []string
 	CertExpiryDays      int
 	MaxTimeoutSeconds   int32
+	// SystemResources feed INTERCEPTS_SYSTEM_RESOURCES. Nil turns the rule
+	// off; DefaultOptions fills in the built-in list.
+	SystemResources []SystemResource
 	// Now is injected so tests are not time bombs.
 	Now time.Time
 }
@@ -70,6 +75,7 @@ func DefaultOptions() Options {
 		ProtectedNamespaces: []string{"kube-system"},
 		CertExpiryDays:      30,
 		MaxTimeoutSeconds:   10,
+		SystemResources:     DefaultSystemResources(),
 		Now:                 time.Now(),
 	}
 }
@@ -155,6 +161,9 @@ func auditWebhook(c model.Config, w model.Webhook, opts Options, info *ClusterIn
 
 	if f, ok := checkDeadlock(c, w, opts, info); ok {
 		add(RuleFailClosedNoExclusion, f.severity, f.message, f.remediation)
+	}
+	if f, ok := checkSystemResources(w, opts, info); ok {
+		add(RuleSystemResources, f.severity, f.message, f.remediation)
 	}
 	if f, ok := checkBackend(w, info); ok {
 		add(RuleBackendMissing, f.severity, f.message, f.remediation)

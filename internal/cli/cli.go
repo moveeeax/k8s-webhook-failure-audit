@@ -49,6 +49,7 @@ type options struct {
 	certDays   int
 	maxTimeout int
 	protected  string
+	systemRes  string
 	asJSON     bool
 	asSARIF    bool
 	version    bool
@@ -86,6 +87,7 @@ func RunWithDeps(args []string, stdout, stderr io.Writer, deps Deps) int {
 	fs.IntVar(&o.certDays, "cert-expiry-days", 30, "report caBundle certificates expiring within this many days")
 	fs.IntVar(&o.maxTimeout, "max-timeout", 10, "report fail-closed webhooks with timeoutSeconds above this")
 	fs.StringVar(&o.protected, "protected-namespaces", "kube-system", "comma-separated namespaces whose writes must keep working to recover a webhook")
+	fs.StringVar(&o.systemRes, "system-resources", strings.Join(audit.DefaultSystemResourceNames(), ","), "comma-separated resource[/subresource][.group] entries that INTERCEPTS_SYSTEM_RESOURCES guards; empty turns the rule off")
 	fs.BoolVar(&o.asJSON, "json", false, "emit JSON")
 	fs.BoolVar(&o.asSARIF, "sarif", false, "emit SARIF 2.1.0 for code scanning")
 	fs.BoolVar(&o.version, "version", false, "print the version and exit")
@@ -107,10 +109,17 @@ func RunWithDeps(args []string, stdout, stderr io.Writer, deps Deps) int {
 		return ExitError
 	}
 
+	systemResources, err := audit.ParseSystemResources(splitList(o.systemRes))
+	if err != nil {
+		fmt.Fprintf(stderr, "error: --system-resources: %v\n", err)
+		return ExitError
+	}
+
 	opts := audit.Options{
 		ProtectedNamespaces: splitList(o.protected),
 		CertExpiryDays:      o.certDays,
 		MaxTimeoutSeconds:   int32(o.maxTimeout),
+		SystemResources:     systemResources,
 		Now:                 deps.Now(),
 	}
 
